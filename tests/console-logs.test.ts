@@ -1,69 +1,52 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sessionManager } from '../src/session-manager.js';
-import type { Session } from '../src/session-manager.js';
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sessionManager } from "../src/session-manager.js";
+import type { Session } from "../src/session-manager.js";
+import type { McpToolCallResult } from "../src/types.js";
 
-describe('Console Logs', () => {
+const PAGE_URL = "data:text/html,%3Chtml%3E%3Cbody%3Eready%3C/body%3E%3C/html%3E";
+
+function getTextContent(result: McpToolCallResult): string {
+  return result.content
+    .filter(item => item.type === "text")
+    .map(item => item.text ?? "")
+    .join("\n");
+}
+
+describe("Console Logs", () => {
   let session: Session;
 
   beforeAll(async () => {
-    session = await sessionManager.createSession({
-      browser: 'chromium',
-      headless: true
-    });
-    await session.page.goto('about:blank');
+    session = await sessionManager.createSession();
+    await sessionManager.callTool(session.id, "browser_navigate", { url: PAGE_URL });
   });
 
   afterAll(async () => {
     await sessionManager.closeSession(session.id);
   });
 
-  it('should capture console.log', async () => {
-    await session.page.evaluate(() => {
-      console.log('test message');
+  it("should return console output captured by the wrapped backend", async () => {
+    const suffix = Date.now().toString();
+    const logMessage = `log-${suffix}`;
+    const errorMessage = `error-${suffix}`;
+    const warningMessage = `warning-${suffix}`;
+
+    await sessionManager.callTool(session.id, "browser_evaluate", {
+      function: `() => {
+        console.log(${JSON.stringify(logMessage)});
+        console.error(${JSON.stringify(errorMessage)});
+        console.warn(${JSON.stringify(warningMessage)});
+        return document.body.textContent;
+      }`
     });
 
-    // Wait a bit for the event to be processed
-    await new Promise(resolve => setTimeout(resolve, 100));
+    const result = await sessionManager.callTool(session.id, "browser_console_messages", { level: "info" });
+    const text = getTextContent(result);
 
-    expect(session.consoleLogs.length).toBeGreaterThan(0);
-    const logEntry = session.consoleLogs.find(l => l.text === 'test message');
-    expect(logEntry).toBeDefined();
-    expect(logEntry?.type).toBe('log');
-  });
-
-  it('should capture console.error', async () => {
-    await session.page.evaluate(() => {
-      console.error('error message');
-    });
-
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const errorEntry = session.consoleLogs.find(l => l.text === 'error message');
-    expect(errorEntry).toBeDefined();
-    expect(errorEntry?.type).toBe('error');
-  });
-
-  it('should capture console.warn', async () => {
-    await session.page.evaluate(() => {
-      console.warn('warning message');
-    });
-
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const warnEntry = session.consoleLogs.find(l => l.text === 'warning message');
-    expect(warnEntry).toBeDefined();
-    expect(warnEntry?.type).toBe('warn');
-  });
-
-  it('should include timestamp in log entries', async () => {
-    await session.page.evaluate(() => {
-      console.log('timestamped message');
-    });
-
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    const entry = session.consoleLogs.find(l => l.text === 'timestamped message');
-    expect(entry?.timestamp).toBeDefined();
-    expect(new Date(entry!.timestamp).getTime()).toBeGreaterThan(0);
+    expect(result.isError).not.toBe(true);
+    expect(text).toContain(logMessage);
+    expect(text).toContain(errorMessage);
+    expect(text).toContain(warningMessage);
+    expect(text).toContain("[ERROR]");
+    expect(text).toContain("[WARNING]");
   });
 });

@@ -1,80 +1,50 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sessionManager } from '../src/session-manager.js';
-import type { Session } from '../src/session-manager.js';
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sessionManager } from "../src/session-manager.js";
+import type { Session } from "../src/session-manager.js";
+import type { McpToolCallResult } from "../src/types.js";
 
-describe('Snapshot', () => {
+const PAGE_HTML = "<!DOCTYPE html><html><body><h1>Snapshot Heading</h1><p>Snapshot body</p></body></html>";
+const PAGE_URL = `data:text/html,${encodeURIComponent(PAGE_HTML)}`;
+
+function getTextContent(result: McpToolCallResult): string {
+  return result.content
+    .filter(item => item.type === "text")
+    .map(item => item.text ?? "")
+    .join("\n");
+}
+
+describe("Snapshot", () => {
   let session: Session;
 
   beforeAll(async () => {
-    session = await sessionManager.createSession({
-      browser: 'chromium',
-      headless: true
-    });
+    session = await sessionManager.createSession();
+    await sessionManager.callTool(session.id, "browser_navigate", { url: PAGE_URL });
   });
 
   afterAll(async () => {
     await sessionManager.closeSession(session.id);
   });
 
-  describe('ariaSnapshot', () => {
-    it('should get accessibility snapshot', async () => {
-      await session.page.goto('https://example.com');
+  it("should return an accessibility snapshot through the wrapped tool", async () => {
+    const result = await sessionManager.callTool(session.id, "browser_snapshot", {});
+    const text = getTextContent(result);
 
-      const snapshot = await session.page.locator('body').ariaSnapshot();
-
-      expect(snapshot).toBeDefined();
-      expect(typeof snapshot).toBe('string');
-      expect(snapshot.length).toBeGreaterThan(0);
-    });
-
-    it('should contain page content in snapshot', async () => {
-      await session.page.goto('https://example.com');
-
-      const snapshot = await session.page.locator('body').ariaSnapshot();
-
-      // Example.com has "Example Domain" heading
-      expect(snapshot.toLowerCase()).toContain('example');
-    });
+    expect(result.isError).not.toBe(true);
+    expect(text).toContain(`Page URL: ${PAGE_URL}`);
+    expect(text).toContain('heading "Snapshot Heading"');
   });
 
-  describe('screenshot', () => {
-    it('should take a screenshot', async () => {
-      await session.page.goto('https://example.com');
+  it("should return screenshot text metadata and image content", async () => {
+    const result = await sessionManager.callTool(session.id, "browser_take_screenshot", { type: "png" });
+    const text = getTextContent(result);
+    const image = result.content.find(item => item.type === "image");
 
-      const buffer = await session.page.screenshot({ type: 'png' });
-
-      expect(buffer).toBeInstanceOf(Buffer);
-      expect(buffer.length).toBeGreaterThan(0);
+    expect(result.isError).not.toBe(true);
+    expect(text).toContain("Screenshot of viewport");
+    expect(image).toMatchObject({
+      type: "image",
+      mimeType: "image/png"
     });
-
-    it('should take full page screenshot', async () => {
-      await session.page.goto('https://example.com');
-
-      const buffer = await session.page.screenshot({
-        type: 'png',
-        fullPage: true
-      });
-
-      expect(buffer).toBeInstanceOf(Buffer);
-    });
-  });
-
-  describe('content extraction', () => {
-    it('should get text content', async () => {
-      await session.page.goto('https://example.com');
-
-      const content = await session.page.textContent('body');
-
-      expect(content).toContain('Example Domain');
-    });
-
-    it('should get HTML content', async () => {
-      await session.page.goto('https://example.com');
-
-      const html = await session.page.content();
-
-      expect(html).toContain('<!DOCTYPE html>');
-      expect(html).toContain('Example Domain');
-    });
+    expect(image?.data?.length ?? 0).toBeGreaterThan(0);
   });
 });

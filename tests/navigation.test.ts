@@ -1,61 +1,60 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { sessionManager } from '../src/session-manager.js';
-import type { Session } from '../src/session-manager.js';
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { sessionManager } from "../src/session-manager.js";
+import type { Session } from "../src/session-manager.js";
+import type { McpToolCallResult } from "../src/types.js";
 
-describe('Navigation', () => {
+const PAGE_HTML = "<!DOCTYPE html><html><head><title>Nav Title</title></head><body><h1>Hello</h1></body></html>";
+const PAGE_URL = `data:text/html,${encodeURIComponent(PAGE_HTML)}`;
+
+function getTextContent(result: McpToolCallResult): string {
+  return result.content
+    .filter(item => item.type === "text")
+    .map(item => item.text ?? "")
+    .join("\n");
+}
+
+function parseJsonResult<T>(result: McpToolCallResult): T {
+  const text = getTextContent(result);
+  const match = text.match(/### Result\n([\s\S]*?)\n### Ran Playwright code/);
+  if (!match) {
+    throw new Error(`Expected JSON result block, received: ${text}`);
+  }
+
+  return JSON.parse(match[1]) as T;
+}
+
+describe("Navigation", () => {
   let session: Session;
 
   beforeAll(async () => {
-    session = await sessionManager.createSession({
-      browser: 'chromium',
-      headless: true
-    });
+    session = await sessionManager.createSession();
   });
 
   afterAll(async () => {
     await sessionManager.closeSession(session.id);
   });
 
-  describe('page.goto', () => {
-    it('should navigate to a URL', async () => {
-      const response = await session.page.goto('https://example.com');
+  it("should navigate through the wrapped browser_navigate tool", async () => {
+    const result = await sessionManager.callTool(session.id, "browser_navigate", { url: PAGE_URL });
+    const text = getTextContent(result);
 
-      expect(response?.status()).toBe(200);
-      expect(session.page.url()).toBe('https://example.com/');
-    });
-
-    it('should get page title', async () => {
-      await session.page.goto('https://example.com');
-
-      const title = await session.page.title();
-
-      expect(title).toBe('Example Domain');
-    });
+    expect(result.isError).not.toBe(true);
+    expect(text).toContain(`Page URL: ${PAGE_URL}`);
+    expect(text).toContain("Page Title: Nav Title");
+    expect(text).toContain('heading "Hello"');
   });
 
-  describe('history navigation', () => {
-    it('should go back and forward', async () => {
-      await session.page.goto('https://example.com');
-      await session.page.goto('https://httpbin.org/get');
+  it("should preserve page state for subsequent wrapped tool calls", async () => {
+    await sessionManager.callTool(session.id, "browser_navigate", { url: PAGE_URL });
 
-      expect(session.page.url()).toContain('httpbin.org');
-
-      await session.page.goBack();
-      expect(session.page.url()).toBe('https://example.com/');
-
-      await session.page.goForward();
-      expect(session.page.url()).toContain('httpbin.org');
+    const result = await sessionManager.callTool(session.id, "browser_run_code", {
+      code: "async (page) => ({ title: await page.title(), url: page.url() })"
     });
-  });
 
-  describe('reload', () => {
-    it('should reload the page', async () => {
-      await session.page.goto('https://example.com');
-
-      const response = await session.page.reload();
-
-      expect(response?.status()).toBe(200);
-      expect(session.page.url()).toBe('https://example.com/');
+    const value = parseJsonResult<{ title: string; url: string }>(result);
+    expect(value).toEqual({
+      title: "Nav Title",
+      url: PAGE_URL
     });
   });
 });
