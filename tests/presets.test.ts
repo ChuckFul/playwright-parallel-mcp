@@ -100,6 +100,8 @@ describe("preset system", () => {
     const session = await sessionManager.createSession({ preset: "outlook" } as any);
 
     expect(session.backend).toBe("@playwright/mcp@0.0.68");
+    expect(session.cdpEndpoint).toBe("http://127.0.0.1:9445");
+    expect(session.preset).toBe("outlook");
     expect(createdConfigs).toHaveLength(1);
     expect(createdConfigs[0].args).toEqual([
       "@playwright/mcp@0.0.68",

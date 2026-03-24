@@ -15,6 +15,8 @@ export interface Session {
   id: string;
   client: McpClient;
   backend: string;
+  cdpEndpoint?: string;
+  preset?: string;
   createdAt: Date;
   lastUsedAt: Date;
 }
@@ -239,6 +241,8 @@ class SessionManager {
         id: crypto.randomUUID(),
         client,
         backend,
+        cdpEndpoint: resolvedOptions.cdpEndpoint,
+        preset: resolvedOptions.preset,
         createdAt: now,
         lastUsedAt: now
       };
@@ -314,6 +318,8 @@ class SessionManager {
     return Array.from(this.sessions.values()).map(session => ({
       id: session.id,
       backend: session.backend,
+      cdpEndpoint: session.cdpEndpoint,
+      preset: session.preset,
       createdAt: session.createdAt,
       lastUsedAt: session.lastUsedAt
     }));

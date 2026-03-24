@@ -45,6 +45,8 @@ export interface McpToolCallResult {
 export interface SessionInfo {
   id: string;
   backend: string;
+  cdpEndpoint?: string;
+  preset?: string;
   createdAt: Date;
   lastUsedAt: Date;
 }

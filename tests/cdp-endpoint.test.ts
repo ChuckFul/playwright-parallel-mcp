@@ -51,6 +51,7 @@ describe("CDP endpoint support", () => {
     } as any);
 
     expect(session).toBeDefined();
+    expect(session.cdpEndpoint).toBe("http://127.0.0.1:9222");
     expect(createdConfigs).toHaveLength(1);
     expect(createdConfigs[0].args).toEqual([
       "@playwright/mcp@latest",

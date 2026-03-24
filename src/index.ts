@@ -34,8 +34,8 @@ server.tool(
           text: JSON.stringify({
             sessionId: session.id,
             backend: session.backend,
-            cdpEndpoint: cdpEndpoint ?? null,
-            preset: preset ?? null,
+            cdpEndpoint: session.cdpEndpoint ?? null,
+            preset: session.preset ?? null,
             createdAt: session.createdAt.toISOString(),
             message: "Session created successfully. Use this sessionId for subsequent tool calls."
           }, null, 2)
