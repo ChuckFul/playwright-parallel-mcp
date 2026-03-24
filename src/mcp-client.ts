@@ -105,7 +105,7 @@ export class McpClient extends EventEmitter {
       capabilities: {},
       clientInfo: {
         name: "playwright-parallel-mcp",
-        version: "0.3.0"
+        version: "0.4.0-plansee.1"
       }
     });
 

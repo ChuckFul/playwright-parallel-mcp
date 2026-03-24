@@ -6,7 +6,7 @@ import { McpTool, DEFAULT_BACKENDS } from "./types.js";
 
 const server = new McpServer({
   name: "playwright-parallel-mcp",
-  version: "0.3.0"
+  version: "0.4.0-plansee.1"
 });
 
 // === Session management tools (always registered) ===

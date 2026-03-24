@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     testTimeout: 60000, // Browser tests need longer timeout
     hookTimeout: 60000, // Session cleanup may take time
+    teardownTimeout: 60000, // Give backend cleanup the same timeout budget
     pool: 'forks',      // Isolate tests to prevent resource contention
     poolOptions: {
       forks: {
