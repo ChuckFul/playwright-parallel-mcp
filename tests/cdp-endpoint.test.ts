@@ -33,6 +33,10 @@ vi.mock("../src/mcp-client.js", () => ({
   McpClient: MockMcpClient
 }));
 
+vi.mock("../src/preflight.js", () => ({
+  checkCdpEndpoint: vi.fn(async () => ({ listening: true }))
+}));
+
 const { sessionManager } = await import("../src/session-manager.js");
 
 describe("CDP endpoint support", () => {

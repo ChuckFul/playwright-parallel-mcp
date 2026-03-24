@@ -1,4 +1,5 @@
 import { McpClient } from "./mcp-client.js";
+import { checkCdpEndpoint } from "./preflight.js";
 import {
   BackendConfig,
   CreateSessionOptions,
@@ -163,6 +164,17 @@ class SessionManager {
           : [...config.args],
         env: config.env
       };
+
+      if (options.cdpEndpoint) {
+        const preflight = await checkCdpEndpoint(options.cdpEndpoint);
+        if (!preflight.listening) {
+          throw new Error(
+            `CDP preflight failed: ${preflight.error}. ` +
+            `Ensure the target application is running with CDP enabled on ${options.cdpEndpoint}.`
+          );
+        }
+      }
+
       const client = new McpClient(sessionConfig);
 
       await client.start();
