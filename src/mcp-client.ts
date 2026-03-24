@@ -10,7 +10,7 @@ import {
 } from "./types.js";
 
 /**
- * MCPクライアント - 子プロセスとしてMCPサーバーを起動し、通信を行う
+ * MCP client that starts a child MCP server process and talks to it over stdio.
  */
 export class McpClient extends EventEmitter {
   private process: ChildProcess | null = null;
@@ -42,7 +42,7 @@ export class McpClient extends EventEmitter {
   }
 
   /**
-   * MCPサーバーを起動して初期化
+   * Start the child MCP server process and initialize the protocol session.
    */
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -59,10 +59,10 @@ export class McpClient extends EventEmitter {
       });
 
       this.process.stderr?.on("data", (data: Buffer) => {
-        // stderrはログとして出力（MCPサーバーのログ）
+        // Treat stderr as backend log output.
         const message = data.toString().trim();
         if (message) {
-          // 起動成功の確認
+          // Some backends emit a startup banner before they accept requests.
           if (message.includes("started") || message.includes("listening")) {
             if (!this.initialized) {
               this.initialized = true;
@@ -78,15 +78,14 @@ export class McpClient extends EventEmitter {
 
       this.process.on("exit", (code) => {
         this.emit("exit", code);
-        // 全ての保留中のリクエストを拒否
-        // 競合状態を防ぐため、deleteしてからrejectする
+        // Reject all pending requests. Delete first to avoid race conditions.
         for (const [id, pending] of this.pendingRequests) {
           this.pendingRequests.delete(id);
           pending.reject(new Error(`Process exited with code ${code}`));
         }
       });
 
-      // タイムアウト - 起動メッセージがない場合でも初期化を試みる
+      // Fall back to a timed initialize attempt if no startup banner arrives.
       setTimeout(() => {
         if (!this.initialized) {
           this.initialized = true;
@@ -97,10 +96,10 @@ export class McpClient extends EventEmitter {
   }
 
   /**
-   * MCPセッションを初期化
+   * Perform the MCP initialize handshake and load the tool list.
    */
   private async initializeSession(): Promise<void> {
-    // initialize を送信
+    // Send initialize.
     await this.sendRequest("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
@@ -110,21 +109,21 @@ export class McpClient extends EventEmitter {
       }
     });
 
-    // initialized 通知を送信
+    // Send initialized notification.
     this.sendNotification("notifications/initialized", {});
 
-    // ツール一覧を取得
+    // Fetch the tool list.
     const result = await this.sendRequest("tools/list", {}) as McpToolsListResult;
     this.tools = result.tools || [];
   }
 
   /**
-   * 受信データを処理
+   * Process streamed stdout data from the child process.
    */
   private handleData(data: string): void {
     this.buffer += data;
 
-    // 改行で分割してJSON-RPCメッセージを処理
+    // Split newline-delimited JSON-RPC messages.
     const lines = this.buffer.split("\n");
     this.buffer = lines.pop() || "";
 
@@ -136,13 +135,13 @@ export class McpClient extends EventEmitter {
         const message = JSON.parse(trimmed) as JsonRpcResponse;
         this.handleMessage(message);
       } catch {
-        // JSON解析エラーは無視
+        // Ignore non-JSON log lines.
       }
     }
   }
 
   /**
-   * JSON-RPCメッセージを処理
+   * Resolve or reject the pending request that matches an incoming response.
    */
   private handleMessage(message: JsonRpcResponse): void {
     if (message.id !== undefined) {
@@ -159,7 +158,7 @@ export class McpClient extends EventEmitter {
   }
 
   /**
-   * JSON-RPCリクエストを送信
+   * Send a JSON-RPC request and await its response.
    */
   async sendRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (!this.process?.stdin) {
@@ -178,7 +177,7 @@ export class McpClient extends EventEmitter {
       this.pendingRequests.set(id, { resolve, reject });
       this.process!.stdin!.write(JSON.stringify(request) + "\n");
 
-      // タイムアウト
+      // Guard against backends that stop responding.
       setTimeout(() => {
         if (this.pendingRequests.has(id)) {
           this.pendingRequests.delete(id);
@@ -189,7 +188,7 @@ export class McpClient extends EventEmitter {
   }
 
   /**
-   * JSON-RPC通知を送信（レスポンスを待たない）
+   * Send a JSON-RPC notification without waiting for a response.
    */
   sendNotification(method: string, params: Record<string, unknown>): void {
     if (!this.process?.stdin) {
@@ -206,14 +205,14 @@ export class McpClient extends EventEmitter {
   }
 
   /**
-   * ツール一覧を取得
+   * Return the cached tool list.
    */
   getTools(): McpTool[] {
     return this.tools;
   }
 
   /**
-   * ツールを呼び出し
+   * Call a backend tool over MCP.
    */
   async callTool(name: string, args: Record<string, unknown>): Promise<McpToolCallResult> {
     const result = await this.sendRequest("tools/call", {
@@ -224,17 +223,17 @@ export class McpClient extends EventEmitter {
   }
 
   /**
-   * プロセスを停止
+   * Stop the child process and reject any outstanding requests.
    */
   async stop(): Promise<void> {
-    // 先にpendingRequestsをrejectしてからクリア（exitイベントより先に処理）
+    // Reject pending requests before the exit event can race with this cleanup.
     for (const [id, pending] of this.pendingRequests) {
       this.pendingRequests.delete(id);
       pending.reject(new Error("Process stopped"));
     }
 
     if (this.process) {
-      // stdinを適切にクローズしてリソースリークを防止
+      // Close stdin explicitly to avoid leaking handles.
       if (this.process.stdin && !this.process.stdin.destroyed) {
         this.process.stdin.end();
       }
@@ -244,7 +243,7 @@ export class McpClient extends EventEmitter {
   }
 
   /**
-   * プロセスが実行中かどうか
+   * Report whether the child process is still running.
    */
   isRunning(): boolean {
     return this.process !== null && !this.process.killed;

@@ -1,4 +1,4 @@
-// MCP Protocol Types
+// MCP protocol types.
 
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -49,9 +49,17 @@ export interface SessionInfo {
   lastUsedAt: Date;
 }
 
+export interface Preset {
+  cdpEndpoint: string;
+  backend?: string;
+}
+
+export type PresetMap = Record<string, Preset>;
+
 export interface CreateSessionOptions {
   backend?: string;
   cdpEndpoint?: string;
+  preset?: string;
 }
 
 export interface BackendConfig {
@@ -60,7 +68,7 @@ export interface BackendConfig {
   env?: Record<string, string>;
 }
 
-// デフォルトのバックエンド設定
+// Built-in backend definitions.
 export const DEFAULT_BACKENDS: Record<string, BackendConfig> = {
   "playwright": {
     command: "npx",

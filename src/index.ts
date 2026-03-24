@@ -9,7 +9,7 @@ const server = new McpServer({
   version: "0.3.0"
 });
 
-// === Session Management Tools (always registered) ===
+// === Session management tools (always registered) ===
 
 server.tool(
   "create_session",
@@ -20,11 +20,14 @@ server.tool(
     ),
     cdpEndpoint: z.string().url().optional().describe(
       "Optional Chrome DevTools Protocol endpoint to connect to instead of launching a fresh browser"
+    ),
+    preset: z.string().optional().describe(
+      "Optional named browser preset loaded from the BROWSER_PRESETS environment variable"
     )
   },
-  async ({ backend, cdpEndpoint }) => {
+  async ({ backend, cdpEndpoint, preset }) => {
     try {
-      const session = await sessionManager.createSession({ backend, cdpEndpoint });
+      const session = await sessionManager.createSession({ backend, cdpEndpoint, preset });
       return {
         content: [{
           type: "text",
@@ -32,6 +35,7 @@ server.tool(
             sessionId: session.id,
             backend: session.backend,
             cdpEndpoint: cdpEndpoint ?? null,
+            preset: preset ?? null,
             createdAt: session.createdAt.toISOString(),
             message: "Session created successfully. Use this sessionId for subsequent tool calls."
           }, null, 2)
@@ -99,23 +103,41 @@ server.tool(
   }
 );
 
-// === Dynamic Tool Registration ===
+server.tool(
+  "list_presets",
+  "List configured browser presets (from BROWSER_PRESETS env var)",
+  {},
+  async () => {
+    const presets = sessionManager.getPresets();
+    return {
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          count: Object.keys(presets).length,
+          presets
+        }, null, 2)
+      }]
+    };
+  }
+);
+
+// === Dynamic tool registration ===
 
 /**
- * バックエンドツールをラップして登録
+ * Wrap a backend tool with the sessionId parameter required by this server.
  */
 function registerBackendTool(tool: McpTool): void {
-  // inputSchema に sessionId を追加
+  // Add sessionId to the backend tool schema.
   const wrappedSchema: Record<string, z.ZodTypeAny> = {
     sessionId: z.string().describe("The session ID to use for this operation")
   };
 
-  // 元のスキーマのプロパティを追加
+  // Copy the backend schema properties into the wrapped schema.
   if (tool.inputSchema.properties) {
     for (const [key, value] of Object.entries(tool.inputSchema.properties)) {
       const prop = value as { type?: string; description?: string; enum?: string[]; default?: unknown };
 
-      // Zod スキーマに変換
+      // Convert JSON Schema field definitions into Zod.
       let zodSchema: z.ZodTypeAny;
 
       switch (prop.type) {
@@ -141,12 +163,12 @@ function registerBackendTool(tool: McpTool): void {
           zodSchema = z.unknown();
       }
 
-      // 説明を追加
+      // Preserve the source description when present.
       if (prop.description) {
         zodSchema = zodSchema.describe(prop.description);
       }
 
-      // オプショナルかどうか
+      // Match the backend required/optional contract.
       const isRequired = tool.inputSchema.required?.includes(key);
       if (!isRequired) {
         zodSchema = zodSchema.optional();
@@ -156,7 +178,7 @@ function registerBackendTool(tool: McpTool): void {
     }
   }
 
-  // ツールを登録
+  // Register the wrapped tool with the MCP server.
   server.tool(
     tool.name,
     tool.description || `Wrapped tool: ${tool.name}`,
@@ -166,7 +188,7 @@ function registerBackendTool(tool: McpTool): void {
 
       try {
         const result = await sessionManager.callTool(sessionId, tool.name, toolArgs);
-        // MCP SDKが期待する型に変換
+        // Convert child-server responses into the shape expected by the MCP SDK.
         const content = result.content.map(c => {
           if (c.type === "image" && c.data && c.mimeType) {
             return { type: "image" as const, data: c.data, mimeType: c.mimeType };
@@ -191,7 +213,7 @@ function registerBackendTool(tool: McpTool): void {
 }
 
 /**
- * バックエンドからツールを取得して登録
+ * Load and register every tool exposed by the default backend.
  */
 async function registerBackendTools(): Promise<number> {
   try {
@@ -214,25 +236,25 @@ async function registerBackendTools(): Promise<number> {
   }
 }
 
-// === Server Startup ===
+// === Server startup ===
 
 async function main() {
   const backend = sessionManager.getDefaultBackend();
 
-  // バックエンドツールを登録
+  // Register backend tools before connecting the server transport.
   const toolCount = await registerBackendTools();
 
-  // 3つのセッション管理ツール + バックエンドツール
-  const totalTools = 3 + toolCount;
+  // Four session-management tools plus the wrapped backend tools.
+  const totalTools = 4 + toolCount;
 
   console.error(`playwright-parallel-mcp server started`);
   console.error(`  Backend: ${backend}`);
-  console.error(`  Tools: ${totalTools} (3 session + ${toolCount} backend)`);
+  console.error(`  Tools: ${totalTools} (4 session + ${toolCount} backend)`);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // グレースフルシャットダウン
+  // Gracefully close backend sessions before exiting.
   const shutdown = async () => {
     console.error("Shutting down...");
     await sessionManager.closeAllSessions();

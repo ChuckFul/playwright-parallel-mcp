@@ -6,6 +6,8 @@ import {
   DEFAULT_BACKENDS,
   McpTool,
   McpToolCallResult,
+  Preset,
+  PresetMap,
   SessionInfo
 } from "./types.js";
 
@@ -18,7 +20,7 @@ export interface Session {
 }
 
 /**
- * セッションマネージャー - 子MCPプロセスを管理
+ * Session manager that owns child MCP backend processes.
  */
 class SessionManager {
   private sessions = new Map<string, Session>();
@@ -28,13 +30,15 @@ class SessionManager {
   private sessionTimeout = parseInt(process.env.SESSION_TIMEOUT_MS || "3600000", 10);
   private cachedTools: McpTool[] | null = null;
   private defaultBackend = process.env.MCP_BACKEND || "playwright";
+  private presets: PresetMap;
 
   constructor() {
+    this.presets = this.loadPresets();
     this.startCleanupInterval();
   }
 
   /**
-   * クリーンアップインターバルを開始
+   * Start the interval that cleans up inactive sessions.
    */
   startCleanupInterval(): void {
     this.stopCleanupInterval();
@@ -49,7 +53,7 @@ class SessionManager {
   }
 
   /**
-   * クリーンアップインターバルを停止
+   * Stop the inactive-session cleanup interval.
    */
   stopCleanupInterval(): void {
     if (this.cleanupInterval) {
@@ -59,7 +63,7 @@ class SessionManager {
   }
 
   /**
-   * 非アクティブなセッションをクリーンアップ
+   * Close sessions that have exceeded the inactivity timeout.
    */
   async cleanupInactiveSessions(): Promise<number> {
     const now = Date.now();
@@ -87,27 +91,54 @@ class SessionManager {
   }
 
   /**
-   * npmパッケージ名のバリデーション
+   * Validate npm package names before handing them to npx.
    * @see https://github.com/npm/validate-npm-package-name
    */
   private isValidPackageName(name: string): boolean {
-    // npmパッケージ名の規則: スコープ付き(@org/pkg)または通常のパッケージ名
-    // 小文字、数字、ハイフン、アンダースコア、ドット、スコープ(@)のみ許可
-    const packageNamePattern = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+    // Accept scoped (@org/pkg) and unscoped package names.
+    // Allow lowercase letters, numbers, hyphens, underscores, dots, and optional versions.
+    const packageNamePattern = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*(@[a-z0-9.-]+)?$/;
     return packageNamePattern.test(name);
   }
 
+  private hasExplicitVersion(backend: string): boolean {
+    if (!backend.startsWith("@")) {
+      return backend.includes("@");
+    }
+
+    const slashIndex = backend.indexOf("/");
+    if (slashIndex === -1) {
+      return false;
+    }
+
+    return backend.indexOf("@", slashIndex) !== -1;
+  }
+
+  private loadPresets(): PresetMap {
+    const raw = process.env.BROWSER_PRESETS;
+    if (!raw) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(raw) as PresetMap;
+    } catch {
+      console.error("Failed to parse BROWSER_PRESETS env var, ignoring");
+      return {};
+    }
+  }
+
   /**
-   * バックエンド設定を取得
+   * Resolve a backend name into the command config used to launch it.
    */
   private getBackendConfig(backend: string): BackendConfig {
-    // プリセットバックエンドを確認
+    // Use built-in backend definitions when available.
     if (DEFAULT_BACKENDS[backend]) {
       return DEFAULT_BACKENDS[backend];
     }
 
-    // カスタムバックエンドはnpx経由でのみ実行可能
-    // セキュリティ: パッケージ名のバリデーションでコマンドインジェクションを防止
+    // Custom backends run through npx only.
+    // Package-name validation prevents command-injection style input.
     if (!this.isValidPackageName(backend)) {
       throw new Error(
         `Invalid backend package name: "${backend}". ` +
@@ -117,19 +148,27 @@ class SessionManager {
 
     return {
       command: "npx",
-      args: [`${backend}@latest`]
+      args: [this.hasExplicitVersion(backend) ? backend : `${backend}@latest`]
     };
   }
 
+  getPresets(): PresetMap {
+    return { ...this.presets };
+  }
+
+  resolvePreset(presetName: string): Preset | undefined {
+    return this.presets[presetName];
+  }
+
   /**
-   * 利用可能なツール一覧を取得（キャッシュ）
+   * Fetch and cache the backend tool list.
    */
   async getAvailableTools(): Promise<McpTool[]> {
     if (this.cachedTools) {
       return this.cachedTools;
     }
 
-    // 一時的なクライアントを起動してツール一覧を取得
+    // Start a temporary client to discover the available tools.
     const config = this.getBackendConfig(this.defaultBackend);
     const tempClient = new McpClient(config);
 
@@ -143,34 +182,50 @@ class SessionManager {
   }
 
   /**
-   * 新しいセッションを作成
+   * Create a new isolated backend session.
    */
   async createSession(options: CreateSessionOptions = {}): Promise<Session> {
-    // 競合状態を防ぐため、先にインクリメントしてからチェック
+    // Count in-flight creations before checking capacity to avoid race conditions.
     this.creating++;
 
     try {
-      // セッション数チェック（creating を含めた総数）
+      // Enforce the session limit, including sessions currently being created.
       if (this.sessions.size + this.creating > this.maxSessions) {
         throw new Error(`Maximum number of sessions (${this.maxSessions}) reached. Close existing sessions first.`);
       }
 
-      const backend = options.backend ?? this.defaultBackend;
+      let resolvedOptions = options;
+      if (resolvedOptions.preset) {
+        const preset = this.resolvePreset(resolvedOptions.preset);
+        if (!preset) {
+          throw new Error(
+            `Unknown preset: "${resolvedOptions.preset}". Available: ${Object.keys(this.presets).join(", ") || "(none)"}`
+          );
+        }
+
+        resolvedOptions = {
+          ...resolvedOptions,
+          cdpEndpoint: resolvedOptions.cdpEndpoint ?? preset.cdpEndpoint,
+          backend: resolvedOptions.backend ?? preset.backend
+        };
+      }
+
+      const backend = resolvedOptions.backend ?? this.defaultBackend;
       const config = this.getBackendConfig(backend);
       const sessionConfig: BackendConfig = {
         command: config.command,
-        args: options.cdpEndpoint
-          ? [...config.args, "--cdp-endpoint", options.cdpEndpoint]
+        args: resolvedOptions.cdpEndpoint
+          ? [...config.args, "--cdp-endpoint", resolvedOptions.cdpEndpoint]
           : [...config.args],
         env: config.env
       };
 
-      if (options.cdpEndpoint) {
-        const preflight = await checkCdpEndpoint(options.cdpEndpoint);
+      if (resolvedOptions.cdpEndpoint) {
+        const preflight = await checkCdpEndpoint(resolvedOptions.cdpEndpoint);
         if (!preflight.listening) {
           throw new Error(
             `CDP preflight failed: ${preflight.error}. ` +
-            `Ensure the target application is running with CDP enabled on ${options.cdpEndpoint}.`
+            `Ensure the target application is running with CDP enabled on ${resolvedOptions.cdpEndpoint}.`
           );
         }
       }
@@ -188,11 +243,10 @@ class SessionManager {
         lastUsedAt: now
       };
 
-      // セッションをMapに追加してからexitハンドラーを登録
-      // （競合状態を防ぐため、この順序が重要）
+      // Add the session before wiring exit cleanup so the handler can always find it.
       this.sessions.set(session.id, session);
 
-      // プロセス終了時にセッションをクリーンアップ
+      // Remove the session if the backend process exits unexpectedly.
       client.on("exit", () => {
         if (this.sessions.has(session.id)) {
           this.sessions.delete(session.id);
@@ -207,7 +261,7 @@ class SessionManager {
   }
 
   /**
-   * セッションを閉じる
+   * Close a single session.
    */
   async closeSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
@@ -225,7 +279,7 @@ class SessionManager {
   }
 
   /**
-   * 全セッションを閉じる
+   * Close every active session.
    */
   async closeAllSessions(): Promise<void> {
     const closePromises = Array.from(this.sessions.keys()).map(id =>
@@ -237,14 +291,14 @@ class SessionManager {
   }
 
   /**
-   * セッションを取得
+   * Return a session by id.
    */
   getSession(sessionId: string): Session | undefined {
     return this.sessions.get(sessionId);
   }
 
   /**
-   * 最終使用時刻を更新
+   * Refresh the last-used timestamp for a session.
    */
   updateLastUsed(sessionId: string): void {
     const session = this.sessions.get(sessionId);
@@ -254,7 +308,7 @@ class SessionManager {
   }
 
   /**
-   * 全セッションを一覧取得
+   * List all active sessions.
    */
   listSessions(): SessionInfo[] {
     return Array.from(this.sessions.values()).map(session => ({
@@ -266,7 +320,7 @@ class SessionManager {
   }
 
   /**
-   * ツールを呼び出し
+   * Call a backend tool through a specific session.
    */
   async callTool(sessionId: string, toolName: string, args: Record<string, unknown>): Promise<McpToolCallResult> {
     const session = this.sessions.get(sessionId);
@@ -279,7 +333,7 @@ class SessionManager {
   }
 
   /**
-   * デフォルトバックエンドを取得
+   * Return the configured default backend name.
    */
   getDefaultBackend(): string {
     return this.defaultBackend;
