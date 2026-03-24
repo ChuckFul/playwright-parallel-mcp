@@ -27,14 +27,29 @@ export class McpClient extends EventEmitter {
     super();
   }
 
+  private getSpawnConfig(): { command: string; args: string[] } {
+    if (process.platform === "win32" && this.config.command === "npx") {
+      return {
+        command: process.env.ComSpec || "cmd.exe",
+        args: ["/d", "/s", "/c", this.config.command, ...this.config.args]
+      };
+    }
+
+    return {
+      command: this.config.command,
+      args: this.config.args
+    };
+  }
+
   /**
    * MCPサーバーを起動して初期化
    */
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
       const env = { ...process.env, ...this.config.env };
+      const spawnConfig = this.getSpawnConfig();
 
-      this.process = spawn(this.config.command, this.config.args, {
+      this.process = spawn(spawnConfig.command, spawnConfig.args, {
         stdio: ["pipe", "pipe", "pipe"],
         env
       });
