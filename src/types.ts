@@ -49,6 +49,11 @@ export interface SessionInfo {
   lastUsedAt: Date;
 }
 
+export interface CreateSessionOptions {
+  backend?: string;
+  cdpEndpoint?: string;
+}
+
 export interface BackendConfig {
   command: string;
   args: string[];

@@ -17,17 +17,21 @@ server.tool(
   {
     backend: z.string().optional().describe(
       `Backend MCP server to use. Options: ${Object.keys(DEFAULT_BACKENDS).join(", ")} or any npm package name`
+    ),
+    cdpEndpoint: z.string().url().optional().describe(
+      "Optional Chrome DevTools Protocol endpoint to connect to instead of launching a fresh browser"
     )
   },
-  async ({ backend }) => {
+  async ({ backend, cdpEndpoint }) => {
     try {
-      const session = await sessionManager.createSession({ backend });
+      const session = await sessionManager.createSession({ backend, cdpEndpoint });
       return {
         content: [{
           type: "text",
           text: JSON.stringify({
             sessionId: session.id,
             backend: session.backend,
+            cdpEndpoint: cdpEndpoint ?? null,
             createdAt: session.createdAt.toISOString(),
             message: "Session created successfully. Use this sessionId for subsequent tool calls."
           }, null, 2)

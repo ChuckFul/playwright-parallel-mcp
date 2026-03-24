@@ -1,6 +1,7 @@
 import { McpClient } from "./mcp-client.js";
 import {
   BackendConfig,
+  CreateSessionOptions,
   DEFAULT_BACKENDS,
   McpTool,
   McpToolCallResult,
@@ -13,10 +14,6 @@ export interface Session {
   backend: string;
   createdAt: Date;
   lastUsedAt: Date;
-}
-
-export interface CreateSessionOptions {
-  backend?: string;  // "playwright" | "chrome-devtools" | カスタムコマンド
 }
 
 /**
@@ -159,7 +156,14 @@ class SessionManager {
 
       const backend = options.backend ?? this.defaultBackend;
       const config = this.getBackendConfig(backend);
-      const client = new McpClient(config);
+      const sessionConfig: BackendConfig = {
+        command: config.command,
+        args: options.cdpEndpoint
+          ? [...config.args, "--cdp-endpoint", options.cdpEndpoint]
+          : [...config.args],
+        env: config.env
+      };
+      const client = new McpClient(sessionConfig);
 
       await client.start();
 
